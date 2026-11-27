@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Расписание</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root {
+  --bg: #ffffff; --card: #f4f4f5; --line: #e4e4e7; --text: #09090b;
+  --muted: #71717a; --accent-bg: #09090b; --accent-text: #ffffff; --pill: #e4e4e7;
+}
+:root[data-theme="dark"] {
+  --bg: #000000; --card: #0f0f11; --line: #27272a; --text: #fafafa;
+  --muted: #8b8b93; --accent-bg: #ffffff; --accent-text: #09090b; --pill: #1f1f23;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+body { padding: calc(12px + env(safe-area-inset-top, 0px)) 14px calc(24px + env(safe-area-inset-bottom, 0px)); max-width: 640px; margin: 0 auto; }
+.top { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+.chip { height: 48px; padding: 0 16px; border-radius: 14px; border: 1px solid var(--line);
+  background: var(--card); color: var(--text); font: inherit; font-size: 15px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.chip.logo { background: var(--accent-bg); color: var(--accent-text); font-weight: 800; font-size: 16px; cursor: default; }
+.chip.icon { width: 48px; padding: 0; font-size: 20px; }
+.chip.on { border-color: var(--text); }
+.spacer { flex: 1; }
+h1 { font-size: 26px; margin: 4px 0 4px; font-weight: 800; letter-spacing: -0.3px; }
+.status { color: var(--muted); font-size: 15px; font-weight: 600; margin: 0 0 12px; min-height: 20px; }
+.tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; margin: 0 -14px 14px; padding-left: 14px; padding-right: 14px; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { flex: 0 0 auto; min-width: 128px; padding: 12px 14px; border-radius: 16px; border: 1px solid var(--line);
+  background: var(--card); color: var(--text); text-align: center; font: inherit; cursor: pointer; }
+.tab b { display: block; font-size: 15px; margin-bottom: 3px; }
+.tab small { color: var(--muted); font-size: 13px; }
+.tab.sel { background: var(--accent-bg); color: var(--accent-text); border-color: var(--accent-bg); }
+.tab.sel small { color: var(--accent-text); opacity: .75; }
+.dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; margin: 0 0 2px 6px; vertical-align: middle; }
+.lesson { display: flex; gap: 14px; align-items: flex-start; border: 1px solid var(--line); background: var(--card);
+  border-radius: 20px; padding: 16px; margin-bottom: 10px; }
+.num { flex: 0 0 auto; width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--pill);
+  display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px; }
+.body { flex: 1; min-width: 0; }
+.time { color: var(--muted); font-size: 14px; font-weight: 600; }
+.subj { font-size: 18px; font-weight: 800; line-height: 1.25; margin: 4px 0 5px; overflow-wrap: anywhere; }
+.teacher { color: var(--muted); font-size: 14px; font-weight: 600; }
+.room { flex: 0 0 auto; background: var(--pill); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px;
+  font-size: 13px; font-weight: 700; align-self: center; }
+.sub { color: var(--muted); font-size: 13px; font-weight: 600; }
+.empty { text-align: center; padding: 48px 12px; color: var(--muted); font-size: 18px; font-weight: 600; }
+.panel { border: 1px solid var(--line); background: var(--card); border-radius: 20px; padding: 14px; margin-bottom: 14px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; margin-bottom: 10px; background: var(--bg); }
+.seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-weight: 700; font-size: 14px;
+  padding: 7px 14px; border-radius: 999px; cursor: pointer; }
+.seg button.sel { background: var(--accent-bg); color: var(--accent-text); }
+.bell { display: flex; align-items: center; gap: 14px; padding: 8px 0; font-weight: 700; font-size: 17px; }
+.bell .n { width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--line); background: var(--pill);
+  display: flex; align-items: center; justify-content: center; font-size: 15px; }
+.bell-extra { color: var(--muted); font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+.foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 18px; }
+.hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="chip logo" id="groupChip">…</div>
+  <div class="spacer"></div>
+  <button class="chip" id="bellsBtn">🔔 Звонки</button>
+  <button class="chip icon" id="themeBtn" aria-label="Тема">🌙</button>
+</div>
+
+<div class="panel hidden" id="bellsPanel"></div>
+
+<h1 id="title">Расписание</h1>
+<p class="status" id="status"></p>
+<div class="tabs" id="tabs"></div>
+<div id="list"></div>
+<div class="foot" id="foot"></div>
+
+<script>
+(function () {
+  var WD_FULL = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
+  var data = null, selected = null, bellTab = null, bellsOpen = false;
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+  function iso(d) {
+    var m = d.getMonth() + 1, day = d.getDate();
+    return d.getFullYear() + "-" + (m < 10 ? "0" : "") + m + "-" + (day < 10 ? "0" : "") + day;
+  }
+  function fromIso(s) { var p = s.split("-"); return new Date(+p[0], +p[1] - 1, +p[2]); }
+  function ru(s) { var p = s.split("-"); return p[2] + "." + p[1] + "." + p[0]; }
+  function addDays(d, n) { var x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); return x; }
+  function bellKey(s) { var w = fromIso(s).getDay(); return w === 1 ? "mon" : w === 6 ? "sat" : "tue_fri"; }
+  function hm(d) { return (d.getHours() < 10 ? "0" : "") + d.getHours() + ":" + (d.getMinutes() < 10 ? "0" : "") + d.getMinutes(); }
+
+  // ---------- тема ----------
+  function getSaved() { try { return localStorage.getItem("theme"); } catch (e) { return null; } }
+  function setTheme(t, save) {
+    document.documentElement.setAttribute("data-theme", t);
+    document.getElementById("themeBtn").textContent = t === "dark" ? "☀️" : "🌙";
+    if (save) { try { localStorage.setItem("theme", t); } catch (e) {} }
+    try { if (window.Telegram && Telegram.WebApp) {
+      Telegram.WebApp.setHeaderColor(t === "dark" ? "#000000" : "#ffffff");
+      Telegram.WebApp.setBackgroundColor(t === "dark" ? "#000000" : "#ffffff");
+    } } catch (e) {}
+  }
+  var tg = null;
+  try { if (window.Telegram && Telegram.WebApp) { tg = Telegram.WebApp; tg.ready(); tg.expand(); } } catch (e) {}
+  var startTheme = getSaved() || (tg && tg.colorScheme) ||
+    (window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  setTheme(startTheme, false);
+  document.getElementById("themeBtn").onclick = function () {
+    setTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark", true);
+  };
+
+  // ---------- данные ----------
+  function lessonsOf(s) { return data.days[s]; }
+  function lastEnd(s) {
+    var items = lessonsOf(s) || [], pairs = data.bells[bellKey(s)].pairs, end = "";
+    items.forEach(function (l) { var b = pairs[String(l.n)]; if (b && b[1] > end) end = b[1]; });
+    return end;
+  }
+  function pickDefault() {
+    var now = new Date(), t = iso(now), tm = iso(addDays(now, 1));
+    var items = lessonsOf(t), end = lastEnd(t);
+    if (items && items.length && (!end || hm(now) <= end)) return t;
+    return tm;
+  }
+  function dateList() {
+    var now = new Date(), set = {}, out = [];
+    var from = iso(addDays(now, -7)), to = iso(addDays(now, 7));
+    Object.keys(data.days).forEach(function (k) { if (k >= from && k <= to) set[k] = 1; });
+    set[iso(now)] = 1; set[iso(addDays(now, 1))] = 1;
+    Object.keys(set).sort().forEach(function (k) {
+      if (fromIso(k).getDay() === 0 && !data.days[k]) return;   // воскресенья без данных не показываем
+      out.push(k);
+    });
+    return out;
+  }
+
+  // ---------- отрисовка ----------
+  function renderTabs() {
+    var today = iso(new Date()), box = document.getElementById("tabs");
+    box.innerHTML = dateList().map(function (k) {
+      return '<button class="tab' + (k === selected ? " sel" : "") + '" data-d="' + k + '"><b>' +
+        WD_FULL[fromIso(k).getDay()] + (k === today ? '<span class="dot"></span>' : "") +
+        "</b><small>" + ru(k) + "</small></button>";
+    }).join("");
+    Array.prototype.forEach.call(box.querySelectorAll(".tab"), function (b) {
+      b.onclick = function () { selected = b.getAttribute("data-d"); render(); };
+    });
+    var sel = box.querySelector(".tab.sel");
+    if (sel && sel.scrollIntoView) { try { sel.scrollIntoView({ inline: "center", block: "nearest" }); } catch (e) {} }
+  }
+
+  function renderList() {
+    var list = document.getElementById("list"), status = document.getElementById("status");
+    var today = iso(new Date()), items = lessonsOf(selected);
+    status.textContent = "";
+    if (items === undefined) {
+      var sunday = fromIso(selected).getDay() === 0;
+      list.innerHTML = '<div class="empty">' + (sunday ? "Выходной 🎉" : "Расписание на этот день ещё не выложили") + "</div>";
+      return;
+    }
+    if (!items.length) { list.innerHTML = '<div class="empty">Пар нет 🎉</div>'; return; }
+    var pairs = data.bells[bellKey(selected)].pairs;
+    if (selected === today) {
+      var end = lastEnd(selected);
+      if (end && hm(new Date()) > end) status.textContent = "на сегодня пары закончились";
+    }
+    list.innerHTML = items.slice().sort(function (a, b) { return a.n - b.n || (a.sub || 0) - (b.sub || 0); }).map(function (l) {
+      var b = pairs[String(l.n)];
+      return '<div class="lesson"><div class="num">' + l.n + '</div><div class="body">' +
+        (b ? '<div class="time">' + b[0] + " — " + b[1] + "</div>" : "") +
+        '<div class="subj">' + esc(l.subject) + "</div>" +
+        (l.sub ? '<div class="sub">подгруппа ' + l.sub + "</div>" : "") +
+        '<div class="teacher">' + esc(l.teacher) + "</div></div>" +
+        (l.room ? '<div class="room">' + esc(l.room) + "</div>" : "") + "</div>";
+    }).join("");
+  }
+
+  function renderBells() {
+    var panel = document.getElementById("bellsPanel");
+    panel.className = "panel" + (bellsOpen ? "" : " hidden");
+    document.getElementById("bellsBtn").className = "chip" + (bellsOpen ? " on" : "");
+    if (!bellsOpen) return;
+    var tabs = [["mon", "Пн"], ["tue_fri", "Вт–Пт"], ["sat", "Сб"]];
+    var cur = bellTab || bellKey(selected), b = data.bells[cur];
+    var html = '<div class="seg">' + tabs.map(function (t) {
+      return '<button data-t="' + t[0] + '" class="' + (t[0] === cur ? "sel" : "") + '">' + t[1] + "</button>";
+    }).join("") + "</div>";
+    if (b.extra) html += '<div class="bell-extra">' + esc(b.extra) + "</div>";
+    Object.keys(b.pairs).sort().forEach(function (n) {
+      html += '<div class="bell"><div class="n">' + n + "</div><div>" + b.pairs[n][0] + "–" + b.pairs[n][1] + "</div></div>";
+    });
+    panel.innerHTML = html;
+    Array.prototype.forEach.call(panel.querySelectorAll("button[data-t]"), function (x) {
+      x.onclick = function () { bellTab = x.getAttribute("data-t"); renderBells(); };
+    });
+  }
+  document.getElementById("bellsBtn").onclick = function () { bellsOpen = !bellsOpen; bellTab = null; renderBells(); };
+
+  function render() {
+    renderTabs(); renderList(); renderBells();
+  }
+
+  function start() {
+    document.getElementById("groupChip").textContent = data.group;
+    document.getElementById("title").textContent = data.group;
+    if (data.updated) {
+      var u = new Date(data.updated);
+      if (!isNaN(u)) document.getElementById("foot").textContent =
+        "обновлено " + ("0" + u.getDate()).slice(-2) + "." + ("0" + (u.getMonth() + 1)).slice(-2) + " в " + hm(u);
+    }
+    selected = pickDefault();
+    render();
+  }
+
+  fetch("data.json?_=" + Date.now()).then(function (r) { return r.json(); }).then(function (d) {
+    data = d; start();
+  }).catch(function () {
+    document.getElementById("list").innerHTML = '<div class="empty">Не удалось загрузить расписание. Попробуй позже.</div>';
+  });
+})();
+</script>
+</body>
+</html>
