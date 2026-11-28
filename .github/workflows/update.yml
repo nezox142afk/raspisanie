@@ -23,21 +23,16 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install openpyxl
-      - name: Обновить расписание и отправить сообщение
+      - name: Обновить расписание
         env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-          GROUP: "263-СП"
-          SEND_TIME: "20:00"
           TZ_NAME: "Asia/Novokuznetsk"
           PUBLIC_KEY: "https://disk.yandex.ru/d/bbxOH6odZrMXrQ"
-          PAGES_URL: "https://nezox142afk.github.io/raspisanie/"
         run: python tools/update.py
       - name: Сохранить архив в репозиторий
         run: |
           git config user.name "schedule-bot"
           git config user.email "schedule-bot@users.noreply.github.com"
-          git add data docs/data.json
+          git add data docs
           if ! git diff --cached --quiet; then
             git commit -m "update schedule"
             git push
