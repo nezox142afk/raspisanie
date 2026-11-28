@@ -1,15 +1,16 @@
-"""Парсер расписания техникума из xlsx (один файл на день)."""
+"""Парсер расписания техникума из xlsx (один файл на день, много групп)."""
 import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 
 import openpyxl
-from openpyxl.utils import get_column_letter
 
-GROUP_SPAN = 6          # каждая группа занимает 6 столбцов (B:G, H:M, N:S, T:Y)
+GROUP_SPAN = 6                     # каждая группа занимает 6 столбцов (B:G, H:M, N:S, T:Y)
+HEADER_COLS = (2, 8, 14, 20)       # столбцы, где стоят названия групп
 GROUP_RE = re.compile(r"^\d{2,3}-[А-Яа-яA-Za-z]+")
 ROOM_RE = re.compile(r"^\d{3,4}$|этаж|зал|спорт", re.I)
+DATE_RE = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})")
 
 
 @dataclass
@@ -33,47 +34,46 @@ def _txt(v) -> str:
     return str(v).strip()
 
 
-def file_date(ws) -> Optional[date]:
-    m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", str(ws["A1"].value or ""))
+def _to_date(text) -> Optional[date]:
+    m = DATE_RE.search(str(text or ""))
     if not m:
         return None
     d, mo, y = map(int, m.groups())
-    return date(y, mo, d)
+    try:
+        return date(y, mo, d)
+    except ValueError:
+        return None
 
 
-def _group_headers(ws):
-    """[(строка, первый столбец, название группы)] по всему листу."""
+def file_date(ws) -> Optional[date]:
+    return _to_date(ws["A1"].value)
+
+
+def peek_date(path: str) -> Optional[date]:
+    """Дата из ячейки A1, не разбирая весь файл."""
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        return _to_date(wb.active["A1"].value)
+    finally:
+        wb.close()
+
+
+def _group_headers(ws) -> List[Tuple[int, int, str]]:
+    """[(строка, первый столбец, название группы)]."""
     res = []
-    for row in ws.iter_rows(min_col=2):
+    for row in ws.iter_rows(min_col=2, max_col=max(HEADER_COLS)):
         for c in row:
-            if isinstance(c.value, str) and GROUP_RE.match(c.value.strip()):
+            if c.column in HEADER_COLS and isinstance(c.value, str) and GROUP_RE.match(c.value.strip()):
                 res.append((c.row, c.column, c.value.strip()))
     return res
 
 
-def parse_group(path: str, group: str):
-    """Возвращает (дата файла, список пар) или (дата, None), если группы нет в файле."""
-    wb = openpyxl.load_workbook(path, data_only=True)
-    ws = wb.active
-    fdate = file_date(ws)
-    headers = _group_headers(ws)
-    target = next((h for h in headers if h[2].lower() == group.lower()), None)
-    if not target:
-        return fdate, None
-    hrow, c0, _ = target
+def _parse_block(ws, widths, headers, hrow: int, c0: int) -> List[Lesson]:
     c1 = c0 + GROUP_SPAN - 1
-
-    # конец блока — ближайшая следующая строка с заголовком группы в тех же столбцах
     end = ws.max_row + 1
-    for r, c, _name in sorted(headers):
-        if r > hrow and c0 <= c <= c1:
+    for r, c, _ in headers:                      # блок кончается на следующем заголовке в тех же столбцах
+        if r > hrow and c == c0 and r < end:
             end = r
-            break
-
-    # ширина объединённых ячеек: (строка, столбец) -> ширина
-    widths = {}
-    for m in ws.merged_cells.ranges:
-        widths[(m.min_row, m.min_col)] = m.max_col - m.min_col + 1
 
     def anchors(row):
         out = []
@@ -83,7 +83,7 @@ def parse_group(path: str, group: str):
                 out.append((col, v))
         return out
 
-    lessons = []
+    lessons: List[Lesson] = []
     for r in range(hrow + 1, end):
         num = ws.cell(r, 1).value
         if not isinstance(num, (int, float)):
@@ -95,27 +95,29 @@ def parse_group(path: str, group: str):
             nxt = subjects[i + 1][0] if i + 1 < len(subjects) else c1 + 1
             room = next((_txt(v) for c, v in rooms if sc < c < nxt), "")
             teacher = next((_txt(v) for c, v in row2 if sc <= c < nxt), "")
-            sub = None
-            if widths.get((r, sc), 1) < 4:
-                sub = (sc - c0) // 2 + 1
+            sub = (sc - c0) // 2 + 1 if widths.get((r, sc), 1) < 4 else None
             lessons.append(Lesson(int(num), _txt(sv), teacher, room, sub))
     lessons.sort(key=lambda l: (l.number, l.subgroup or 0))
-    return fdate, lessons
+    return lessons
 
 
-def list_groups(path: str):
+def parse_all(path: str) -> Tuple[Optional[date], Dict[str, List[Lesson]]]:
+    """Дата файла и пары всех групп: {название группы: [Lesson, ...]}."""
     wb = openpyxl.load_workbook(path, data_only=True)
-    return sorted({h[2] for h in _group_headers(wb.active)})
+    ws = wb.active
+    widths = {(m.min_row, m.min_col): m.max_col - m.min_col + 1 for m in ws.merged_cells.ranges}
+    headers = _group_headers(ws)
+    result: Dict[str, List[Lesson]] = {}
+    for hrow, c0, name in headers:
+        if name not in result:
+            result[name] = _parse_block(ws, widths, headers, hrow, c0)
+    return file_date(ws), result
 
 
-def peek_date(path: str) -> Optional[date]:
-    """Дата из ячейки A1, не разбирая весь файл."""
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    try:
-        m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", str(wb.active["A1"].value or ""))
-    finally:
-        wb.close()
-    if not m:
-        return None
-    d, mo, y = map(int, m.groups())
-    return date(y, mo, d)
+def parse_group(path: str, group: str):
+    """(дата файла, пары группы или None, если группы нет в файле)."""
+    fdate, allg = parse_all(path)
+    for name, lessons in allg.items():
+        if name.lower() == group.lower():
+            return fdate, lessons
+    return fdate, None

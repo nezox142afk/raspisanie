@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Расписание</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root {
   --bg: #ffffff; --card: #f4f4f5; --line: #e4e4e7; --text: #09090b;
@@ -22,7 +21,7 @@ body { padding: calc(12px + env(safe-area-inset-top, 0px)) 14px calc(24px + env(
 .chip { height: 48px; padding: 0 16px; border-radius: 14px; border: 1px solid var(--line);
   background: var(--card); color: var(--text); font: inherit; font-size: 15px; font-weight: 600;
   display: flex; align-items: center; justify-content: center; cursor: pointer; }
-.chip.logo { background: var(--accent-bg); color: var(--accent-text); font-weight: 800; font-size: 16px; cursor: default; }
+.chip.logo { background: var(--accent-bg); color: var(--accent-text); font-weight: 800; font-size: 16px; }
 .chip.icon { width: 48px; padding: 0; font-size: 20px; }
 .chip.on { border-color: var(--text); }
 .spacer { flex: 1; }
@@ -59,73 +58,136 @@ h1 { font-size: 26px; margin: 4px 0 4px; font-weight: 800; letter-spacing: -0.3p
   display: flex; align-items: center; justify-content: center; font-size: 15px; }
 .bell-extra { color: var(--muted); font-weight: 600; font-size: 14px; margin-bottom: 4px; }
 .foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 18px; }
+.search { width: 100%; height: 52px; border-radius: 16px; border: 1px solid var(--line); background: var(--card);
+  color: var(--text); font: inherit; font-size: 17px; padding: 0 16px; margin: 6px 0 12px; outline: none; }
+.search:focus { border-color: var(--text); }
+.glist button { display: block; width: 100%; height: 56px; margin-bottom: 8px; border-radius: 16px; border: 1px solid var(--line);
+  background: var(--card); color: var(--text); font: inherit; font-size: 18px; font-weight: 800; cursor: pointer; }
+.glist button.cur { border-color: var(--text); }
 .hidden { display: none; }
 </style>
 </head>
 <body>
 <div class="top">
-  <div class="chip logo" id="groupChip">…</div>
+  <button class="chip logo" id="groupChip">Группа</button>
   <div class="spacer"></div>
   <button class="chip" id="bellsBtn">🔔 Звонки</button>
   <button class="chip icon" id="themeBtn" aria-label="Тема">🌙</button>
 </div>
 
-<div class="panel hidden" id="bellsPanel"></div>
+<div id="picker" class="hidden">
+  <h1>Выбери группу</h1>
+  <input class="search" id="search" type="text" placeholder="Поиск группы…" autocomplete="off">
+  <div class="glist" id="glist"></div>
+</div>
 
-<h1 id="title">Расписание</h1>
-<p class="status" id="status"></p>
-<div class="tabs" id="tabs"></div>
-<div id="list"></div>
-<div class="foot" id="foot"></div>
+<div id="main">
+  <div class="panel hidden" id="bellsPanel"></div>
+  <h1 id="title">Расписание</h1>
+  <p class="status" id="status"></p>
+  <div class="tabs" id="tabs"></div>
+  <div id="list"><div class="empty">Загрузка…</div></div>
+  <div class="foot" id="foot"></div>
+</div>
 
+<script async src="https://telegram.org/js/telegram-web-app.js" onload="window.__tgLoaded && window.__tgLoaded()"></script>
 <script>
 (function () {
-  var WD_FULL = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
-  var data = null, selected = null, bellTab = null, bellsOpen = false;
+  // Сразу сообщаем Телеграму, что страница готова, не дожидаясь его скрипта (он может грузиться долго).
+  try {
+    if (window.TelegramWebviewProxy && window.TelegramWebviewProxy.postEvent) {
+      window.TelegramWebviewProxy.postEvent("web_app_ready", "");
+    } else if (window.parent && window.parent !== window) {
+      window.parent.postMessage(JSON.stringify({ eventType: "web_app_ready", eventData: "" }), "*");
+    }
+  } catch (e) {}
 
+  var WD_FULL = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
+  var idx = null, data = null, groupId = null, selected = null, bellTab = null;
+  var bellsOpen = false, pickerOpen = false, failed = false;
+
+  function $(id) { return document.getElementById(id); }
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
     });
   }
+  function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) {} return null; }
+  function parse(s) { try { return s ? JSON.parse(s) : null; } catch (e) { return null; } }
   function iso(d) {
     var m = d.getMonth() + 1, day = d.getDate();
     return d.getFullYear() + "-" + (m < 10 ? "0" : "") + m + "-" + (day < 10 ? "0" : "") + day;
   }
   function fromIso(s) { var p = s.split("-"); return new Date(+p[0], +p[1] - 1, +p[2]); }
   function ru(s) { var p = s.split("-"); return p[2] + "." + p[1] + "." + p[0]; }
-  function addDays(d, n) { var x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); return x; }
+  function addDays(d, n) { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); }
   function bellKey(s) { var w = fromIso(s).getDay(); return w === 1 ? "mon" : w === 6 ? "sat" : "tue_fri"; }
   function hm(d) { return (d.getHours() < 10 ? "0" : "") + d.getHours() + ":" + (d.getMinutes() < 10 ? "0" : "") + d.getMinutes(); }
 
   // ---------- тема ----------
-  function getSaved() { try { return localStorage.getItem("theme"); } catch (e) { return null; } }
   function setTheme(t, save) {
     document.documentElement.setAttribute("data-theme", t);
-    document.getElementById("themeBtn").textContent = t === "dark" ? "☀️" : "🌙";
-    if (save) { try { localStorage.setItem("theme", t); } catch (e) {} }
+    $("themeBtn").textContent = t === "dark" ? "☀️" : "🌙";
+    if (save) store("theme", t);
     try { if (window.Telegram && Telegram.WebApp) {
       Telegram.WebApp.setHeaderColor(t === "dark" ? "#000000" : "#ffffff");
       Telegram.WebApp.setBackgroundColor(t === "dark" ? "#000000" : "#ffffff");
     } } catch (e) {}
   }
-  var tg = null;
-  try { if (window.Telegram && Telegram.WebApp) { tg = Telegram.WebApp; tg.ready(); tg.expand(); } } catch (e) {}
-  var startTheme = getSaved() || (tg && tg.colorScheme) ||
-    (window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-  setTheme(startTheme, false);
-  document.getElementById("themeBtn").onclick = function () {
+  var savedTheme = store("theme");
+  setTheme(savedTheme || (window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"), false);
+  $("themeBtn").onclick = function () {
     setTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark", true);
   };
+  function initTg() {
+    try {
+      var tg = window.Telegram && Telegram.WebApp;
+      if (!tg) return;
+      tg.ready(); tg.expand();
+      if (!savedTheme && tg.colorScheme) setTheme(tg.colorScheme, false);
+    } catch (e) {}
+  }
+  if (window.Telegram && window.Telegram.WebApp) initTg(); else window.__tgLoaded = initTg;
 
-  // ---------- данные ----------
-  function lessonsOf(s) { return data.days[s]; }
+  // ---------- загрузка данных (сначала из кеша, потом свежие) ----------
+  function getJson(url, cb) {
+    var done = false, ctrl = window.AbortController ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 20000);
+    fetch(url + "?v=" + Math.floor(Date.now() / 300000), ctrl ? { signal: ctrl.signal } : undefined)
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (t) { clearTimeout(timer); if (!done) { done = true; cb(t); } })
+      .catch(function () { clearTimeout(timer); if (!done) { done = true; cb(null); } });
+  }
+  function refreshIndex() {
+    getJson("index.json", function (t) {
+      if (!t) { failed = !idx; return render(); }
+      var changed = store("idx") !== t;
+      store("idx", t); idx = parse(t); failed = false;
+      if (changed) render();
+    });
+  }
+  function refreshGroup() {
+    if (!groupId) return;
+    var id = groupId;
+    getJson("data/" + id + ".json", function (t) {
+      if (id !== groupId) return;
+      if (!t) { failed = !data; return render(); }
+      var changed = store("g:" + id) !== t;
+      store("g:" + id, t); data = parse(t); failed = false;
+      if (!selected) selected = pickDefault();
+      if (changed || !selected) render();
+    });
+  }
+
+  // ---------- логика дня ----------
+  function lessonsOf(s) { return data && data.days ? data.days[s] : undefined; }
   function lastEnd(s) {
-    var items = lessonsOf(s) || [], pairs = data.bells[bellKey(s)].pairs, end = "";
+    var items = lessonsOf(s) || [], pairs = idx.bells[bellKey(s)].pairs, end = "";
     items.forEach(function (l) { var b = pairs[String(l.n)]; if (b && b[1] > end) end = b[1]; });
     return end;
   }
   function pickDefault() {
+    if (!data || !idx) return null;
     var now = new Date(), t = iso(now), tm = iso(addDays(now, 1));
     var items = lessonsOf(t), end = lastEnd(t);
     if (items && items.length && (!end || hm(now) <= end)) return t;
@@ -136,16 +198,43 @@ h1 { font-size: 26px; margin: 4px 0 4px; font-weight: 800; letter-spacing: -0.3p
     var from = iso(addDays(now, -7)), to = iso(addDays(now, 7));
     Object.keys(data.days).forEach(function (k) { if (k >= from && k <= to) set[k] = 1; });
     set[iso(now)] = 1; set[iso(addDays(now, 1))] = 1;
+    if (selected) set[selected] = 1;
     Object.keys(set).sort().forEach(function (k) {
-      if (fromIso(k).getDay() === 0 && !data.days[k]) return;   // воскресенья без данных не показываем
+      if (fromIso(k).getDay() === 0 && !data.days[k] && k !== selected) return;
       out.push(k);
     });
     return out;
   }
 
+  // ---------- выбор группы ----------
+  function renderPicker() {
+    var q = ($("search").value || "").toLowerCase().trim();
+    var groups = (idx ? idx.groups : []).slice().sort(function (a, b) {
+      return a[0].localeCompare(b[0], "ru", { numeric: true });
+    }).filter(function (g) { return !q || g[0].toLowerCase().indexOf(q) !== -1; });
+    $("glist").innerHTML = groups.length ? groups.map(function (g) {
+      return '<button data-id="' + esc(g[1]) + '" class="' + (g[1] === groupId ? "cur" : "") + '">' + esc(g[0]) + "</button>";
+    }).join("") : '<div class="empty">' + (idx ? "Такой группы нет" : (failed ? "Не удалось загрузить список групп" : "Загрузка…")) + "</div>";
+    Array.prototype.forEach.call($("glist").querySelectorAll("button"), function (b) {
+      b.onclick = function () { chooseGroup(b.getAttribute("data-id")); };
+    });
+  }
+  function chooseGroup(id) {
+    groupId = id; store("gid", id);
+    data = parse(store("g:" + id)); selected = null; bellTab = null;
+    pickerOpen = false;
+    if (data) selected = pickDefault();
+    render(); refreshGroup();
+  }
+  $("search").oninput = renderPicker;
+  $("groupChip").onclick = function () {
+    if (!groupId && pickerOpen) return;
+    pickerOpen = !pickerOpen; $("search").value = ""; render();
+  };
+
   // ---------- отрисовка ----------
   function renderTabs() {
-    var today = iso(new Date()), box = document.getElementById("tabs");
+    var today = iso(new Date()), box = $("tabs");
     box.innerHTML = dateList().map(function (k) {
       return '<button class="tab' + (k === selected ? " sel" : "") + '" data-d="' + k + '"><b>' +
         WD_FULL[fromIso(k).getDay()] + (k === today ? '<span class="dot"></span>' : "") +
@@ -159,8 +248,7 @@ h1 { font-size: 26px; margin: 4px 0 4px; font-weight: 800; letter-spacing: -0.3p
   }
 
   function renderList() {
-    var list = document.getElementById("list"), status = document.getElementById("status");
-    var today = iso(new Date()), items = lessonsOf(selected);
+    var list = $("list"), status = $("status"), today = iso(new Date()), items = lessonsOf(selected);
     status.textContent = "";
     if (items === undefined) {
       var sunday = fromIso(selected).getDay() === 0;
@@ -168,7 +256,7 @@ h1 { font-size: 26px; margin: 4px 0 4px; font-weight: 800; letter-spacing: -0.3p
       return;
     }
     if (!items.length) { list.innerHTML = '<div class="empty">Пар нет 🎉</div>'; return; }
-    var pairs = data.bells[bellKey(selected)].pairs;
+    var pairs = idx.bells[bellKey(selected)].pairs;
     if (selected === today) {
       var end = lastEnd(selected);
       if (end && hm(new Date()) > end) status.textContent = "на сегодня пары закончились";
@@ -185,12 +273,12 @@ h1 { font-size: 26px; margin: 4px 0 4px; font-weight: 800; letter-spacing: -0.3p
   }
 
   function renderBells() {
-    var panel = document.getElementById("bellsPanel");
+    var panel = $("bellsPanel");
     panel.className = "panel" + (bellsOpen ? "" : " hidden");
-    document.getElementById("bellsBtn").className = "chip" + (bellsOpen ? " on" : "");
-    if (!bellsOpen) return;
+    $("bellsBtn").className = "chip" + (bellsOpen ? " on" : "");
+    if (!bellsOpen || !idx) return;
     var tabs = [["mon", "Пн"], ["tue_fri", "Вт–Пт"], ["sat", "Сб"]];
-    var cur = bellTab || bellKey(selected), b = data.bells[cur];
+    var cur = bellTab || (selected ? bellKey(selected) : "tue_fri"), b = idx.bells[cur];
     var html = '<div class="seg">' + tabs.map(function (t) {
       return '<button data-t="' + t[0] + '" class="' + (t[0] === cur ? "sel" : "") + '">' + t[1] + "</button>";
     }).join("") + "</div>";
@@ -203,29 +291,37 @@ h1 { font-size: 26px; margin: 4px 0 4px; font-weight: 800; letter-spacing: -0.3p
       x.onclick = function () { bellTab = x.getAttribute("data-t"); renderBells(); };
     });
   }
-  document.getElementById("bellsBtn").onclick = function () { bellsOpen = !bellsOpen; bellTab = null; renderBells(); };
+  $("bellsBtn").onclick = function () { bellsOpen = !bellsOpen; bellTab = null; renderBells(); };
 
   function render() {
+    var showPicker = pickerOpen || !groupId;
+    $("picker").className = showPicker ? "" : "hidden";
+    $("main").className = showPicker ? "hidden" : "";
+    $("bellsBtn").className = showPicker ? "chip hidden" : "chip" + (bellsOpen ? " on" : "");
+    var name = data ? data.group : (idx && groupId ? (idx.groups.filter(function (g) { return g[1] === groupId; })[0] || [""])[0] : "");
+    $("groupChip").textContent = showPicker ? (groupId ? "✕ Закрыть" : "Группа") : "‹ " + (name || "Группа");
+    if (showPicker) { renderPicker(); return; }
+    if (!data || !idx || !selected) {
+      $("title").textContent = name || "Расписание";
+      $("tabs").innerHTML = "";
+      $("list").innerHTML = '<div class="empty">' + (failed ? "Не удалось загрузить расписание.<br>Проверь интернет и открой снова." : "Загрузка…") + "</div>";
+      return;
+    }
+    $("title").textContent = data.group;
+    if (idx.updated) {
+      var u = new Date(idx.updated);
+      if (!isNaN(u)) $("foot").textContent = "обновлено " + ("0" + u.getDate()).slice(-2) + "." + ("0" + (u.getMonth() + 1)).slice(-2) + " в " + hm(u);
+    }
     renderTabs(); renderList(); renderBells();
   }
 
-  function start() {
-    document.getElementById("groupChip").textContent = data.group;
-    document.getElementById("title").textContent = data.group;
-    if (data.updated) {
-      var u = new Date(data.updated);
-      if (!isNaN(u)) document.getElementById("foot").textContent =
-        "обновлено " + ("0" + u.getDate()).slice(-2) + "." + ("0" + (u.getMonth() + 1)).slice(-2) + " в " + hm(u);
-    }
-    selected = pickDefault();
-    render();
-  }
-
-  fetch("data.json?_=" + Date.now()).then(function (r) { return r.json(); }).then(function (d) {
-    data = d; start();
-  }).catch(function () {
-    document.getElementById("list").innerHTML = '<div class="empty">Не удалось загрузить расписание. Попробуй позже.</div>';
-  });
+  // ---------- старт ----------
+  groupId = store("gid");
+  idx = parse(store("idx"));
+  if (groupId) { data = parse(store("g:" + groupId)); if (data) selected = pickDefault(); }
+  render();
+  refreshIndex();
+  refreshGroup();
 })();
 </script>
 </body>
